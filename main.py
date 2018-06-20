@@ -23,36 +23,71 @@ class TwitterUtil:
 		auth.set_access_token(self.credentials["ACCESS_TOKEN"], self.credentials["ACCESS_TOKEN_SECRET"])
 		self.api = tweepy.API(auth)
 
-	def get_user_tweets(self, username, count=100):
+	def find_reply_to_tweet(self, tweet, tweets):
+		for item in tweets:
+			if item.in_reply_to_status_id is not None and item.in_reply_to_status_id == tweet.id:
+				return item
+
+	def fetch_all_replies(self, reply, tweets):
+		replies = [reply]
+		depht_of_search = 0
+		while depht_of_search >= 0:
+			parent = replies[depht_of_search]
+			child = self.find_reply_to_tweet(parent, tweets)
+			if child is None:
+				depht_of_search = -1
+			else:
+				replies.append(child)
+				depht_of_search += 1
+		return replies
+
+	def format_threads(self, threads):
+		threads_formated = []
+		for thread in threads:
+			new_thread = [thread.get('head').full_text]
+			for reply in thread.get('replies'):
+				new_thread.append(reply.full_text)
+			threads_formated.append(new_thread)
+		return threads_formated
+
+
+	def get_user_tweets(self, username, count=300):
 		try:
-			status = self.api.user_timeline(screen_name=username, count=count)
+			status = self.api.user_timeline(screen_name=username, count=count, tweet_mode='extended')
+			# Let's fetch all the tweets
+			tweets = [s for s in status]
+			print("We have {} tweets".format(len(tweets)))
+			# Let's filter to the main tweets that may be heads in a thread
+			main_twits = list(filter(lambda x: x.in_reply_to_status_id is None, tweets))
+			print("We have {} main tweets".format(len(main_twits)))
 
-			main_twits = {}
-			for s in status:
-				if s.in_reply_to_status_id is None:
-					t = s.__dict__
-					t["replies"] = []
-					main_twits[s.id] = t
-				elif s.in_reply_to_status_id in main_twits.keys():
-					main_twits[s.in_reply_to_status_id]["replies"].append(s.__dict__)
+			# Now we get all the threads that have a reply, forming head:status, replies[status] object
+			timeline_threads = []
+			for twit in main_twits:
+				reply = self.find_reply_to_tweet(twit, tweets)
+				if reply is not None:
+					new_thread = {'head': twit, 'replies': [reply]}
+					timeline_threads.append(new_thread)
 
-			return main_twits
+			print("We have {} potential threads".format(len(timeline_threads)))
+			# Now we try to find the other replies
+			for thread in timeline_threads:
+				thread['replies'] = self.fetch_all_replies(thread.get('replies')[0], tweets)
+			return timeline_threads
 		except Exception as e:
 			print(e)
-	
+
 
 def main():
 	parser = ArgumentParser()
 	parser.add_argument("username", help="username contains user identify")
-	
+
 	args = parser.parse_args()
 
 	tu = TwitterUtil()
-	status = tu.get_user_tweets(args.username)
-
-	for id, t in status.items():
-		print(id, t.get("text"), t.get("replies"))
-
+	threads = tu.get_user_tweets(args.username)
+	formated_threads = tu.format_threads(threads)
+	print(formated_threads)
 
 if __name__ == '__main__':
 	main()
